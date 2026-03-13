@@ -82,7 +82,26 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Least-privilege custom IAM role
+# 3. Bootstrap Terraform — long-lived project-scoped resources
+#    Creates the secureTransferSignBlob custom role once at the project level.
+#    Must run before any workspace terraform apply.
+# ---------------------------------------------------------------------------
+echo ""
+echo "==> Applying bootstrap Terraform..."
+terraform -chdir=terraform/bootstrap init \
+  -backend-config="bucket=$STATE_BUCKET" \
+  -reconfigure \
+  -input=false \
+  -no-color
+
+terraform -chdir=terraform/bootstrap apply \
+  -var="project_id=$GCP_PROJECT" \
+  -auto-approve \
+  -input=false \
+  -no-color
+
+# ---------------------------------------------------------------------------
+# 5. Least-privilege custom IAM role
 #    Scoped to exactly what Terraform needs — no storage.admin or iam.admin.
 # ---------------------------------------------------------------------------
 echo ""
@@ -112,7 +131,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. GitHub Actions service account
+# 6. GitHub Actions service account
 # ---------------------------------------------------------------------------
 echo ""
 echo "==> Creating GitHub Actions service account..."
@@ -139,7 +158,7 @@ for legacy in roles/storage.admin roles/iam.serviceAccountAdmin roles/iam.servic
 done
 
 # ---------------------------------------------------------------------------
-# 5. Workload Identity Federation — no SA key is ever created or stored
+# 7. Workload Identity Federation — no SA key is ever created or stored
 # ---------------------------------------------------------------------------
 echo ""
 echo "==> Configuring Workload Identity Federation..."
@@ -177,7 +196,7 @@ gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
   --quiet
 
 # ---------------------------------------------------------------------------
-# 6. GCS Data Access Audit Logs
+# 8. GCS Data Access Audit Logs
 #    Adds READ + WRITE audit log config to the project IAM policy.
 # ---------------------------------------------------------------------------
 echo ""
@@ -216,7 +235,7 @@ print("    Audit logs enabled.")
 PYEOF
 
 # ---------------------------------------------------------------------------
-# 7. GitHub Actions secrets
+# 9. GitHub Actions secrets
 #    No GCP_CREDENTIALS — WIF handles authentication keylessly.
 # ---------------------------------------------------------------------------
 echo ""

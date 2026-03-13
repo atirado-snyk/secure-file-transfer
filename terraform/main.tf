@@ -68,10 +68,12 @@ resource "google_storage_bucket_iam_member" "signer_viewer" {
 # Grant signing members iam.serviceAccounts.signBlob on this SA so they can
 # generate V4 signed URLs via the IAM API without a key file.
 # Scoped to this SA resource only — not a project-level grant.
+# The custom role is created once in terraform/bootstrap/ to avoid conflicts
+# across concurrent workspace applies.
 resource "google_service_account_iam_member" "signers" {
   for_each           = toset(var.signing_sa_members)
   service_account_id = google_service_account.signer.name
-  role               = "roles/iam.serviceAccountTokenCreator"
+  role               = "projects/${var.project_id}/roles/secureTransferSignBlob"
   member             = each.value
 }
 

@@ -76,13 +76,24 @@ python scripts/transfer.py upload --workspace acme-q1-report --file report.pdf
 
 The script prints the signed URL to share with the customer. The URL expires after 1 hour by default.
 
-### Tear down
+### Tear down a workspace
 
 ```bash
 gh workflow run terraform.yml -f action=destroy -f workspace=acme-q1-report -f confirm_destroy=destroy
 ```
 
 Typing `destroy` in `confirm_destroy` is required — it prevents accidental teardown.
+
+### Tear down the project entirely
+
+When you are done with the tool and want a clean GCP account, run a workspace destroy for each active workspace first, then tear down the long-lived bootstrap resources:
+
+```bash
+terraform -chdir=terraform/bootstrap init -backend-config="bucket=<project_id>-tf-state"
+terraform -chdir=terraform/bootstrap destroy -var="project_id=<project_id>"
+```
+
+This removes the `secureTransferSignBlob` custom role. The Terraform state bucket, WIF configuration, and GitHub Actions service account were created by `setup.sh` and must be removed manually via `gcloud` if desired.
 
 ### Running multiple transfers in parallel
 

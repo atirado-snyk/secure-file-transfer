@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # test-run.sh — end-to-end walkthrough of the secure-file-transfer workflow.
 #
-# Runs through: provision → pack (encrypted zip) → verify URL → tear down
-# Takes about 3 minutes.
+# Runs through: provision → upload (single file) → pack (folder) → verify → tear down
+# Takes about 5 minutes.
 
 set -euo pipefail
 
 WORKSPACE="test-run-$(date +%s)"
 TEST_DIR="/tmp/${WORKSPACE}"
+TEST_FILE="/tmp/${WORKSPACE}-single.txt"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,19 +82,23 @@ fi
 ok "Python venv found"
 
 # ---------------------------------------------------------------------------
-# Step 1 — Create a test folder with a few files
+# Step 1 — Create test fixtures
 # ---------------------------------------------------------------------------
-step "1 / 4  Create test folder"
+step "1 / 5  Create test fixtures"
+
+echo "secure-file-transfer single-file test — $(date -u)" > "$TEST_FILE"
+ok "Created single file: $TEST_FILE"
+
 mkdir -p "$TEST_DIR/subfolder"
 echo "secure-file-transfer test run — workspace: $WORKSPACE — $(date -u)" > "$TEST_DIR/readme.txt"
 echo "top-level file" > "$TEST_DIR/document.txt"
 echo "nested file"   > "$TEST_DIR/subfolder/nested.txt"
-ok "Created $TEST_DIR with 3 files (including subfolder)"
+ok "Created folder: $TEST_DIR with 3 files (including subfolder)"
 
 # ---------------------------------------------------------------------------
 # Step 2 — Provision workspace
 # ---------------------------------------------------------------------------
-step "2 / 4  Provision workspace: $WORKSPACE"
+step "2 / 5  Provision workspace: $WORKSPACE"
 info "Triggering terraform apply..."
 BEFORE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 gh workflow run terraform.yml \
@@ -111,13 +116,27 @@ info "Bucket: secure-transfer-${WORKSPACE}"
 info "Waiting 90 s for IAM propagation..."
 sleep 90
 
-# ---------------------------------------------------------------------------
-# Step 3 — Pack folder and get signed URL
-# ---------------------------------------------------------------------------
-step "3 / 4  Pack folder and get signed URL"
 source "$VENV_DIR/bin/activate"
 
+# ---------------------------------------------------------------------------
+# Step 3 — Upload single file
+# ---------------------------------------------------------------------------
+step "3 / 5  Upload single file"
+
 UPLOAD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+python "$(dirname "$0")/scripts/transfer.py" upload \
+  --workspace "$WORKSPACE" \
+  --file "$TEST_FILE" \
+  --expiry 30m
+
+echo ""
+ask "Download the zip above, enter the password, confirm the file contains the expected text — then press Enter"
+
+# ---------------------------------------------------------------------------
+# Step 4 — Pack folder
+# ---------------------------------------------------------------------------
+step "4 / 5  Pack folder"
+
 python "$(dirname "$0")/scripts/transfer.py" pack \
   --workspace "$WORKSPACE" \
   --folder "$TEST_DIR" \
@@ -126,12 +145,12 @@ python "$(dirname "$0")/scripts/transfer.py" pack \
 deactivate
 
 echo ""
-ask "Copy the URL above, download the zip, enter the password, verify the files — then press Enter"
+ask "Download the zip above, enter the password, verify all 3 files and the subfolder — then press Enter"
 
 # ---------------------------------------------------------------------------
-# Step 4 — Tear down
+# Step 5 — Tear down
 # ---------------------------------------------------------------------------
-step "4 / 4  Tear down workspace: $WORKSPACE"
+step "5 / 5  Tear down workspace: $WORKSPACE"
 check_download_occurred "$WORKSPACE" "$UPLOAD_TIME"
 info "Triggering terraform destroy..."
 BEFORE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -147,7 +166,7 @@ wait_for_run "$RUN_ID"
 ok "Workspace destroyed"
 
 # ---------------------------------------------------------------------------
-rm -rf "$TEST_DIR"
+rm -rf "$TEST_DIR" "$TEST_FILE"
 echo ""
 echo "══════════════════════════════════════════════════════════════════════"
 echo "  Test run complete. All steps passed."

@@ -151,6 +151,18 @@ class TestParser:
         assert args.workspace == "my-ws"
         assert args.prefix == ""
 
+    def test_pack_requires_workspace(self):
+        with pytest.raises(SystemExit):
+            self.parser.parse_args(["pack", "--folder", "./docs"])
+
+    def test_pack_requires_folder(self):
+        with pytest.raises(SystemExit):
+            self.parser.parse_args(["pack", "--workspace", "my-ws"])
+
+    def test_pack_defaults(self):
+        args = self.parser.parse_args(["pack", "--workspace", "my-ws", "--folder", "./docs"])
+        assert args.expiry == "1h"
+
 
 # ---------------------------------------------------------------------------
 # cmd_upload (mocked GCP)
@@ -216,6 +228,43 @@ class TestCmdUpload:
         args = self._make_args(tmp_path / "nonexistent.pdf")
         with pytest.raises(SystemExit):
             transfer.cmd_upload(args)
+
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_upload_sha256_in_output(
+        self, mock_client_cls, mock_default, tmp_path, capsys
+    ):
+        test_file = tmp_path / "file.txt"
+        test_file.write_bytes(b"hello")
+        mock_creds = MagicMock()
+        mock_creds.token = "tok"
+        mock_default.return_value = (mock_creds, "proj")
+        mock_blob = MagicMock()
+        mock_blob.generate_signed_url.return_value = "https://url"
+        mock_client_cls.return_value.bucket.return_value.blob.return_value = mock_blob
+
+        transfer.cmd_upload(self._make_args(test_file))
+
+        assert "SHA-256" in capsys.readouterr().out
+
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_upload_unknown_extension_uses_octet_stream(
+        self, mock_client_cls, mock_default, tmp_path
+    ):
+        test_file = tmp_path / "data.unknownext"
+        test_file.write_bytes(b"x")
+        mock_creds = MagicMock()
+        mock_default.return_value = (mock_creds, "proj")
+        mock_blob = MagicMock()
+        mock_blob.generate_signed_url.return_value = "https://url"
+        mock_client_cls.return_value.bucket.return_value.blob.return_value = mock_blob
+
+        transfer.cmd_upload(self._make_args(test_file))
+
+        mock_blob.upload_from_filename.assert_called_once_with(
+            str(test_file), content_type="application/octet-stream"
+        )
 
     @patch("transfer.google.auth.default")
     @patch("transfer.storage.Client")
@@ -365,6 +414,106 @@ class TestCmdPack:
 
         mock_bucket.blob.assert_called_with("my-folder.zip")
 
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_pack_sha256_in_output(
+        self, mock_client_cls, mock_default, tmp_path, capsys
+    ):
+        src = tmp_path / "docs"
+        src.mkdir()
+        (src / "file.txt").write_text("hello")
+        mock_creds = MagicMock()
+        mock_creds.token = "tok"
+        mock_default.return_value = (mock_creds, "proj")
+        mock_blob = MagicMock()
+        mock_blob.content_type = "application/zip"
+        mock_blob.generate_signed_url.return_value = "https://url"
+        mock_client_cls.return_value.bucket.return_value.blob.return_value = mock_blob
+
+        transfer.cmd_pack(self._make_args(src))
+
+        assert "SHA-256" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# cmd_list (mocked GCP)
+# ---------------------------------------------------------------------------
+
+class TestCmdList:
+    def _make_args(self, prefix=""):
+        args = MagicMock()
+        args.workspace = "test-ws"
+        args.prefix = prefix
+        return args
+
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_list_empty_bucket(self, mock_client_cls, mock_default, capsys):
+        mock_default.return_value = (MagicMock(), "proj")
+        mock_client_cls.return_value.bucket.return_value.list_blobs.return_value = []
+
+        transfer.cmd_list(self._make_args())
+
+        assert "empty" in capsys.readouterr().out.lower()
+
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_list_nonempty_bucket_prints_name_and_size(
+        self, mock_client_cls, mock_default, capsys
+    ):
+        mock_default.return_value = (MagicMock(), "proj")
+        blob = MagicMock()
+        blob.name = "report.pdf"
+        blob.size = 1024
+        blob.updated = datetime.datetime(2026, 3, 1, 12, 0, tzinfo=datetime.timezone.utc)
+        mock_client_cls.return_value.bucket.return_value.list_blobs.return_value = [blob]
+
+        transfer.cmd_list(self._make_args())
+
+        out = capsys.readouterr().out
+        assert "report.pdf" in out
+        assert "1,024" in out
+
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_list_blob_with_null_metadata_shows_dashes(
+        self, mock_client_cls, mock_default, capsys
+    ):
+        mock_default.return_value = (MagicMock(), "proj")
+        blob = MagicMock()
+        blob.name = "file.txt"
+        blob.size = None
+        blob.updated = None
+        mock_client_cls.return_value.bucket.return_value.list_blobs.return_value = [blob]
+
+        transfer.cmd_list(self._make_args())
+
+        out = capsys.readouterr().out
+        assert "file.txt" in out
+        assert "—" in out
+
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_list_prefix_forwarded(self, mock_client_cls, mock_default):
+        mock_default.return_value = (MagicMock(), "proj")
+        mock_bucket = MagicMock()
+        mock_bucket.list_blobs.return_value = []
+        mock_client_cls.return_value.bucket.return_value = mock_bucket
+
+        transfer.cmd_list(self._make_args(prefix="invoices/"))
+
+        mock_bucket.list_blobs.assert_called_with(prefix="invoices/")
+
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_list_uses_correct_bucket(self, mock_client_cls, mock_default):
+        mock_default.return_value = (MagicMock(), "proj")
+        mock_client_cls.return_value.bucket.return_value.list_blobs.return_value = []
+
+        transfer.cmd_list(self._make_args())
+
+        mock_client_cls.return_value.bucket.assert_called_with("secure-transfer-test-ws")
+
 
 # ---------------------------------------------------------------------------
 # cmd_delete (mocked GCP)
@@ -394,3 +543,13 @@ class TestCmdDelete:
 
         mock_blob.delete.assert_called_once()
         assert "report.pdf" in capsys.readouterr().out
+
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_delete_uses_correct_bucket(self, mock_client_cls, mock_default):
+        mock_default.return_value = (MagicMock(), "proj")
+        mock_client_cls.return_value.bucket.return_value.blob.return_value = MagicMock()
+
+        transfer.cmd_delete(self._make_args("report.pdf"))
+
+        mock_client_cls.return_value.bucket.assert_called_with("secure-transfer-test-ws")

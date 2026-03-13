@@ -38,6 +38,7 @@ jobs:
           exit 1
 
       - name: Validate workspace name
+        working-directory: ${{ github.workspace }}
         run: |
           if ! echo "${{ github.event.inputs.workspace }}" | grep -qE '^[a-z0-9][a-z0-9-]{1,47}[a-z0-9]$'; then
             echo "::error::Invalid workspace name. Use lowercase letters, numbers, and hyphens only (3–49 chars)."

@@ -2,6 +2,8 @@
 
 import datetime
 import argparse
+import string
+import zipfile
 import pytest
 from unittest.mock import MagicMock, patch, call
 import sys
@@ -233,6 +235,135 @@ class TestCmdUpload:
         transfer.cmd_upload(self._make_args(test_file, prefix="folder"))
 
         mock_bucket.blob.assert_called_with("folder/file.txt")
+
+
+# ---------------------------------------------------------------------------
+# generate_password
+# ---------------------------------------------------------------------------
+
+class TestGeneratePassword:
+    def test_length(self):
+        assert len(transfer.generate_password()) == 32
+
+    def test_alphanumeric_only(self):
+        allowed = set(string.ascii_letters + string.digits)
+        assert set(transfer.generate_password()) <= allowed
+
+    def test_unique(self):
+        assert transfer.generate_password() != transfer.generate_password()
+
+
+# ---------------------------------------------------------------------------
+# create_encrypted_zip
+# ---------------------------------------------------------------------------
+
+class TestCreateEncryptedZip:
+    def test_zip_is_created(self, tmp_path):
+        src = tmp_path / "docs"
+        src.mkdir()
+        (src / "file.txt").write_text("hello")
+        dest = tmp_path / "out.zip"
+        transfer.create_encrypted_zip(src, dest, "password123")
+        assert dest.exists()
+
+    def test_zip_contains_file(self, tmp_path):
+        src = tmp_path / "docs"
+        src.mkdir()
+        (src / "report.pdf").write_bytes(b"data")
+        dest = tmp_path / "out.zip"
+        transfer.create_encrypted_zip(src, dest, "password123")
+        import pyzipper
+        with pyzipper.AESZipFile(dest) as zf:
+            zf.setpassword(b"password123")
+            names = zf.namelist()
+        assert any("report.pdf" in n for n in names)
+
+    def test_zip_preserves_structure(self, tmp_path):
+        src = tmp_path / "docs"
+        src.mkdir()
+        sub = src / "invoices"
+        sub.mkdir()
+        (sub / "inv001.pdf").write_bytes(b"x")
+        dest = tmp_path / "out.zip"
+        transfer.create_encrypted_zip(src, dest, "password123")
+        import pyzipper
+        with pyzipper.AESZipFile(dest) as zf:
+            zf.setpassword(b"password123")
+            names = zf.namelist()
+        assert any("invoices/inv001.pdf" in n for n in names)
+
+    def test_wrong_password_raises(self, tmp_path):
+        src = tmp_path / "docs"
+        src.mkdir()
+        (src / "file.txt").write_text("secret")
+        dest = tmp_path / "out.zip"
+        transfer.create_encrypted_zip(src, dest, "correctpassword")
+        import pyzipper
+        with pyzipper.AESZipFile(dest) as zf:
+            zf.setpassword(b"wrongpassword")
+            with pytest.raises(Exception):
+                zf.read(zf.namelist()[0])
+
+
+# ---------------------------------------------------------------------------
+# cmd_pack (mocked GCP)
+# ---------------------------------------------------------------------------
+
+class TestCmdPack:
+    def _make_args(self, folder, expiry="1h"):
+        args = MagicMock()
+        args.workspace = "test-ws"
+        args.folder = str(folder)
+        args.expiry = expiry
+        return args
+
+    def test_missing_folder_exits(self, tmp_path):
+        args = self._make_args(tmp_path / "nonexistent")
+        with pytest.raises(SystemExit):
+            transfer.cmd_pack(args)
+
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_pack_uploads_zip_and_prints_url_and_password(
+        self, mock_client_cls, mock_default, tmp_path, capsys
+    ):
+        src = tmp_path / "docs"
+        src.mkdir()
+        (src / "file.txt").write_text("hello")
+
+        mock_creds = MagicMock()
+        mock_creds.token = "tok"
+        mock_default.return_value = (mock_creds, "proj")
+        mock_blob = MagicMock()
+        mock_blob.content_type = "application/zip"
+        mock_blob.generate_signed_url.return_value = "https://signed.url/docs.zip"
+        mock_client_cls.return_value.bucket.return_value.blob.return_value = mock_blob
+
+        transfer.cmd_pack(self._make_args(src))
+
+        mock_blob.upload_from_filename.assert_called_once()
+        out = capsys.readouterr().out
+        assert "https://signed.url/docs.zip" in out
+        assert "PASSWORD" in out
+
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_zip_name_matches_folder(self, mock_client_cls, mock_default, tmp_path):
+        src = tmp_path / "my-folder"
+        src.mkdir()
+        (src / "f.txt").write_text("x")
+
+        mock_default.return_value = (MagicMock(), "proj")
+        mock_blob = MagicMock()
+        mock_blob.content_type = "application/zip"
+        mock_blob.generate_signed_url.return_value = "https://url"
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_client_cls.return_value.bucket.return_value = mock_bucket
+
+        transfer.cmd_pack(self._make_args(src))
+
+        mock_bucket.blob.assert_called_with("my-folder.zip")
 
 
 # ---------------------------------------------------------------------------

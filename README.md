@@ -124,6 +124,36 @@ Each gets its own bucket (`secure-transfer-<workspace>`) and can be torn down in
 
 ---
 
+## Transferring a folder
+
+Use `pack` to transfer multiple files. It creates an AES-256 encrypted zip of the entire folder (preserving structure), uploads it, and prints the signed URL and a randomly generated 32-character password separately:
+
+```bash
+python scripts/transfer.py pack --workspace acme-q1-report --folder ./documents
+```
+
+The output is split deliberately — share the URL by email and the password by a separate channel (e.g. IM):
+
+```
+========================================================================
+Shareable URL (expires 2026-03-13 12:00 UTC):
+
+https://storage.googleapis.com/...
+
+Integrity:  SHA-256 = 3b4c...
+========================================================================
+
+────────────────────────────────────────────────────────────────────────
+PASSWORD — share via a separate channel, do NOT send with the URL:
+
+Xk9mP2rL...
+────────────────────────────────────────────────────────────────────────
+```
+
+The recipient unzips with any AES-256 compatible tool (7-Zip, macOS Archive Utility, `unzip`).
+
+---
+
 ## Other script commands
 
 ```bash
@@ -131,9 +161,9 @@ Each gets its own bucket (`secure-transfer-<workspace>`) and can be torn down in
 python scripts/transfer.py list --workspace acme-q1-report
 
 # Delete a specific file before it expires
-python scripts/transfer.py delete --workspace acme-q1-report --object report.pdf
+python scripts/transfer.py delete --workspace acme-q1-report --object report.pdf --confirm report.pdf
 
-# Override the default 1h expiry (max 7d)
+# Override the default 1h expiry (max 24h)
 python scripts/transfer.py upload --workspace acme-q1-report --file report.pdf --expiry 4h
 ```
 

@@ -89,18 +89,13 @@ def cmd_upload(args):
 
     bucket_name, signing_sa = resolve(args.workspace, project)
 
-    target_creds = google.auth.impersonated_credentials.Credentials(
-        source_credentials=source_credentials,
-        target_principal=signing_sa,
-        target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        lifetime=300,
-    )
-    client = storage.Client(credentials=target_creds)
+    # Upload as the operator (source credentials have objectCreator on the bucket)
+    upload_client = storage.Client(credentials=source_credentials)
 
     object_name = (
         f"{args.prefix.rstrip('/')}/{filepath.name}" if args.prefix else filepath.name
     )
-    blob = client.bucket(bucket_name).blob(object_name)
+    blob = upload_client.bucket(bucket_name).blob(object_name)
 
     content_type, _ = mimetypes.guess_type(str(filepath))
     content_type = content_type or "application/octet-stream"
@@ -108,6 +103,16 @@ def cmd_upload(args):
     print(f"Uploading  {filepath}  →  gs://{bucket_name}/{object_name}")
     blob.upload_from_filename(str(filepath), content_type=content_type)
     print("Upload complete.")
+
+    # Sign the URL as the signing SA (has objectViewer + signBlob permission)
+    target_creds = google.auth.impersonated_credentials.Credentials(
+        source_credentials=source_credentials,
+        target_principal=signing_sa,
+        target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        lifetime=300,
+    )
+    signing_client = storage.Client(credentials=target_creds)
+    blob = signing_client.bucket(bucket_name).blob(object_name)
 
     expiry = parse_expiry(args.expiry)
     url = blob.generate_signed_url(
@@ -131,15 +136,8 @@ def cmd_list(args):
     source_credentials, project = google.auth.default(
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
-    source_credentials.refresh(google.auth.transport.requests.Request())
-    bucket_name, signing_sa = resolve(args.workspace, project)
-    target_creds = google.auth.impersonated_credentials.Credentials(
-        source_credentials=source_credentials,
-        target_principal=signing_sa,
-        target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        lifetime=300,
-    )
-    client = storage.Client(credentials=target_creds)
+    bucket_name, _ = resolve(args.workspace, project)
+    client = storage.Client(credentials=source_credentials)
     blobs = list(client.bucket(bucket_name).list_blobs(prefix=args.prefix or None))
     if not blobs:
         print("Bucket is empty.")
@@ -156,15 +154,8 @@ def cmd_delete(args):
     source_credentials, project = google.auth.default(
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
-    source_credentials.refresh(google.auth.transport.requests.Request())
-    bucket_name, signing_sa = resolve(args.workspace, project)
-    target_creds = google.auth.impersonated_credentials.Credentials(
-        source_credentials=source_credentials,
-        target_principal=signing_sa,
-        target_scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        lifetime=300,
-    )
-    client = storage.Client(credentials=target_creds)
+    bucket_name, _ = resolve(args.workspace, project)
+    client = storage.Client(credentials=source_credentials)
     client.bucket(bucket_name).blob(args.object).delete()
     print(f"Deleted gs://{bucket_name}/{args.object}")
 

@@ -76,6 +76,22 @@ python scripts/transfer.py upload --workspace acme-q1-report --file report.pdf
 
 The script prints the signed URL to share with the customer. The URL expires after 1 hour by default.
 
+Along with the URL, the script prints a SHA-256 checksum of the uploaded file:
+
+```
+Integrity:  SHA-256 = 3b4c9f...
+```
+
+Share the checksum with the recipient alongside the URL so they can verify the file after downloading:
+
+```bash
+# macOS
+shasum -a 256 <downloaded-file>
+
+# Linux
+sha256sum <downloaded-file>
+```
+
 ### Tear down a workspace
 
 ```bash
@@ -141,5 +157,6 @@ Several security findings from code reviews were deliberately not addressed. Eac
 - **Keyless URL signing** — the script impersonates the per-workspace signing SA via the IAM `signBlob` API using your local ADC credentials, revocable at any time.
 - **No accidental public access** — buckets have `public_access_prevention = enforced` and uniform bucket-level access; objects can never be made public.
 - **Signed URLs are read-only and time-limited** — scoped to `GET` only, expire at the requested time (default 1h, max 7d).
+- **File integrity** — a SHA-256 checksum is computed before upload and printed alongside the signed URL. Recipients can verify the file was not modified in transit or at rest.
 - **Audit trail** — GCS Data Access Audit Logs (READ + WRITE) are enabled at the project level. Every file access is recorded in Cloud Audit Logs.
 - **Automatic cleanup** — files auto-delete after 7 days even if the workspace is not explicitly destroyed.

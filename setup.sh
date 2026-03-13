@@ -4,11 +4,12 @@
 # What this script does:
 #   1. Enables required GCP APIs
 #   2. Creates a GCS bucket for Terraform state
-#   3. Creates a least-privilege custom IAM role for the deployer
-#   4. Creates a GitHub Actions service account with that role
-#   5. Configures Workload Identity Federation (no SA key ever created)
-#   6. Enables GCS Data Access Audit Logs
-#   7. Sets all GitHub Actions secrets
+#   3. Applies bootstrap Terraform (creates the secureTransferSignBlob signing role)
+#   4. Creates a least-privilege custom IAM role for the deployer
+#   5. Creates a GitHub Actions service account with that role
+#   6. Configures Workload Identity Federation (no SA key ever created)
+#   7. Enables GCS Data Access Audit Logs
+#   8. Sets all GitHub Actions secrets
 #
 # Prerequisites:
 #   - gcloud CLI authenticated:  gcloud auth login && gcloud config set project <project_id>
@@ -101,7 +102,7 @@ terraform -chdir=terraform/bootstrap apply \
   -no-color
 
 # ---------------------------------------------------------------------------
-# 5. Least-privilege custom IAM role
+# 4. Least-privilege custom IAM role
 #    Scoped to exactly what Terraform needs — no storage.admin or iam.admin.
 # ---------------------------------------------------------------------------
 echo ""
@@ -131,7 +132,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. GitHub Actions service account
+# 5. GitHub Actions service account
 # ---------------------------------------------------------------------------
 echo ""
 echo "==> Creating GitHub Actions service account..."
@@ -158,7 +159,7 @@ for legacy in roles/storage.admin roles/iam.serviceAccountAdmin roles/iam.servic
 done
 
 # ---------------------------------------------------------------------------
-# 7. Workload Identity Federation — no SA key is ever created or stored
+# 6. Workload Identity Federation — no SA key is ever created or stored
 # ---------------------------------------------------------------------------
 echo ""
 echo "==> Configuring Workload Identity Federation..."
@@ -196,7 +197,7 @@ gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
   --quiet
 
 # ---------------------------------------------------------------------------
-# 8. GCS Data Access Audit Logs
+# 7. GCS Data Access Audit Logs
 #    Adds READ + WRITE audit log config to the project IAM policy.
 # ---------------------------------------------------------------------------
 echo ""
@@ -235,7 +236,7 @@ print("    Audit logs enabled.")
 PYEOF
 
 # ---------------------------------------------------------------------------
-# 9. GitHub Actions secrets
+# 8. GitHub Actions secrets
 #    No GCP_CREDENTIALS — WIF handles authentication keylessly.
 # ---------------------------------------------------------------------------
 echo ""

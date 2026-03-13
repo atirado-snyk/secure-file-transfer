@@ -51,11 +51,12 @@ bash setup.sh
 It will:
 1. Enable the required GCP APIs
 2. Create a GCS bucket for Terraform state
-3. Create a least-privilege custom IAM role scoped to exactly what Terraform needs
-4. Create a GitHub Actions service account with that role
-5. Configure Workload Identity Federation so GitHub Actions authenticates without any key file
-6. Enable GCS Data Access Audit Logs so every file access is recorded
-7. Set all repository secrets (`GCP_PROJECT_ID`, `GCP_SIGNING_MEMBERS`, `TF_STATE_BUCKET`, `WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT`)
+3. Apply bootstrap Terraform to create the `secureTransferSignBlob` signing role
+4. Create a least-privilege custom IAM role scoped to exactly what Terraform needs
+5. Create a GitHub Actions service account with that role
+6. Configure Workload Identity Federation so GitHub Actions authenticates without any key file
+7. Enable GCS Data Access Audit Logs so every file access is recorded
+8. Set all repository secrets (`GCP_PROJECT_ID`, `GCP_SIGNING_MEMBERS`, `TF_STATE_BUCKET`, `WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT`)
 
 Then install the Python dependencies:
 
@@ -196,7 +197,7 @@ Several security findings from code reviews were deliberately not addressed. Eac
 - **Least-privilege deployer** — the GitHub Actions service account holds a custom role with only the 19 permissions Terraform needs. No broad `storage.admin` or `iam.admin`.
 - **Keyless URL signing** — the script impersonates the per-workspace signing SA via the IAM `signBlob` API using your local ADC credentials, revocable at any time.
 - **No accidental public access** — buckets have `public_access_prevention = enforced` and uniform bucket-level access; objects can never be made public.
-- **Signed URLs are read-only and time-limited** — scoped to `GET` only, expire at the requested time (default 1h, max 7d).
+- **Signed URLs are read-only and time-limited** — scoped to `GET` only, expire at the requested time (default 1h, max 24h).
 - **File integrity** — a SHA-256 checksum is computed before upload and printed alongside the signed URL. Recipients can verify the file was not modified in transit or at rest.
 - **Audit trail** — GCS Data Access Audit Logs (READ + WRITE) are enabled at the project level. Every file access is recorded in Cloud Audit Logs.
-- **Automatic cleanup** — files auto-delete after 7 days even if the workspace is not explicitly destroyed.
+- **Automatic cleanup** — files auto-delete after 1 day even if the workspace is not explicitly destroyed.

@@ -101,6 +101,28 @@ gh workflow run terraform.yml -f action=destroy -f workspace=acme-q1-report -f c
 
 Typing `destroy` in `confirm_destroy` is required — it prevents accidental teardown.
 
+### Automatic workspace expiry
+
+Workspaces self-destruct automatically. A scheduled cleanup workflow runs every hour and destroys any workspace whose bucket is older than the TTL (default **36 hours**):
+
+| Layer | What happens | When |
+|-------|-------------|------|
+| Signed URL | Expires, link stops working | After 1 hour (default) |
+| Files in bucket | Auto-deleted by lifecycle policy | After 24 hours |
+| Whole workspace | Bucket + service account + IAM torn down | After 36 hours |
+
+To trigger cleanup immediately, or with a custom TTL:
+
+```bash
+# Destroy all workspaces older than 36h (default)
+gh workflow run cleanup.yml
+
+# Destroy all workspaces older than 12h
+gh workflow run cleanup.yml -f ttl_hours=12
+```
+
+You can still tear down a specific workspace manually at any time — automatic expiry is a safety net, not a replacement.
+
 ### Tear down the project entirely
 
 When you are done with the tool and want a clean GCP account, run a workspace destroy for each active workspace first, then tear down the long-lived bootstrap resources:
@@ -200,4 +222,4 @@ Several security findings from code reviews were deliberately not addressed. Eac
 - **Signed URLs are read-only and time-limited** — scoped to `GET` only, expire at the requested time (default 1h, max 24h).
 - **File integrity** — a SHA-256 checksum is computed before upload and printed alongside the signed URL. Recipients can verify the file was not modified in transit or at rest.
 - **Audit trail** — GCS Data Access Audit Logs (READ + WRITE) are enabled at the project level. Every file access is recorded in Cloud Audit Logs.
-- **Automatic cleanup** — files auto-delete after 1 day even if the workspace is not explicitly destroyed.
+- **Automatic cleanup** — files auto-delete after 1 day; the entire workspace (bucket, service account, IAM bindings) is torn down after 36 hours by a scheduled cleanup workflow.

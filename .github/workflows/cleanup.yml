@@ -1,0 +1,107 @@
+name: Cleanup — destroy expired workspaces
+
+# Runs every hour and tears down any workspace whose GCS bucket is older than
+# the TTL. Mirrors what terraform.yml does for a manual destroy, just looped.
+#
+# Can also be triggered manually with a custom TTL — useful for bulk teardown
+# or testing the cleanup logic without waiting for the scheduler.
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # every hour
+  workflow_dispatch:
+    inputs:
+      ttl_hours:
+        description: 'Destroy workspaces older than this many hours (default: 36)'
+        required: false
+        default: '36'
+
+jobs:
+  cleanup:
+    name: Destroy expired workspaces
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account:            ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "~1.5"
+
+      - name: Terraform init
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+        env:
+          TF_VAR_project_id:         ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_signing_sa_members: ${{ secrets.GCP_SIGNING_MEMBERS }}
+
+      - name: Destroy expired workspaces
+        env:
+          GCP_PROJECT_ID:            ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_project_id:         ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_signing_sa_members: ${{ secrets.GCP_SIGNING_MEMBERS }}
+          TTL_HOURS:                 ${{ github.event.inputs.ttl_hours || '36' }}
+        run: |
+          set -euo pipefail
+          ttl_seconds=$((TTL_HOURS * 3600))
+          now=$(date -u +%s)
+          destroyed=0
+          failed=0
+
+          mapfile -t buckets < <(gcloud storage buckets list \
+            --filter="name:secure-transfer-*" \
+            --format="value(name)" \
+            --project="$GCP_PROJECT_ID" 2>/dev/null || true)
+
+          if [[ ${#buckets[@]} -eq 0 ]]; then
+            echo "No active workspaces found."
+            exit 0
+          fi
+
+          for bucket in "${buckets[@]}"; do
+            workspace="${bucket#secure-transfer-}"
+
+            created_raw=$(gcloud storage buckets describe "gs://${bucket}" \
+              --format="value(timeCreated)" \
+              --project="$GCP_PROJECT_ID" 2>/dev/null) || {
+              echo "  ⚠ Could not read metadata for ${bucket} — skipping."
+              continue
+            }
+
+            created_epoch=$(date -u -d "$created_raw" +%s)
+            age=$((now - created_epoch))
+            age_display="$((age/3600))h $(((age%3600)/60))m"
+
+            if [[ $age -gt $ttl_seconds ]]; then
+              echo ""
+              echo "==> Destroying expired workspace: ${workspace} (age: ${age_display}, TTL: ${TTL_HOURS}h)"
+              if  terraform workspace select "${workspace}" \
+               && terraform destroy -auto-approve \
+               && terraform workspace select default \
+               && terraform workspace delete "${workspace}"; then
+                destroyed=$((destroyed + 1))
+              else
+                echo "  ✗ Failed to destroy ${workspace}"
+                failed=$((failed + 1))
+              fi
+            else
+              echo "    Keeping: ${workspace} (age: ${age_display}, TTL: ${TTL_HOURS}h)"
+            fi
+          done
+
+          echo ""
+          echo "Done. Destroyed: ${destroyed}  Failed: ${failed}"
+          [[ $failed -eq 0 ]]

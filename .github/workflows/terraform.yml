@@ -23,6 +23,9 @@ jobs:
   terraform:
     name: terraform ${{ github.event.inputs.action }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for Workload Identity Federation
     defaults:
       run:
         working-directory: terraform
@@ -39,7 +42,8 @@ jobs:
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account:            ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3

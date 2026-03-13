@@ -4,18 +4,21 @@
 # What this script does:
 #   1. Enables required GCP APIs
 #   2. Creates a GCS bucket for Terraform state
-#   3. Creates a GitHub Actions service account with the necessary roles
-#   4. Sets all four GitHub Actions secrets
+#   3. Creates a least-privilege custom IAM role for the deployer
+#   4. Creates a GitHub Actions service account with that role
+#   5. Configures Workload Identity Federation (no SA key ever created)
+#   6. Enables GCS Data Access Audit Logs
+#   7. Sets all GitHub Actions secrets
 #
 # Prerequisites:
 #   - gcloud CLI authenticated:  gcloud auth login && gcloud config set project <project_id>
 #   - gh CLI authenticated:      gh auth login
-#   - Both CLIs in PATH
+#   - python3 in PATH
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Config — edit these before running
+# Config
 # ---------------------------------------------------------------------------
 GCP_PROJECT="${GCP_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 GCP_SIGNING_MEMBER="${GCP_SIGNING_MEMBER:-user:$(gcloud config get-value account 2>/dev/null)}"
@@ -35,11 +38,16 @@ fi
 
 SA_EMAIL="github-actions-deployer@${GCP_PROJECT}.iam.gserviceaccount.com"
 STATE_BUCKET="${GCP_PROJECT}-tf-state"
-KEY_FILE="$(mktemp /tmp/gha-credentials-XXXXXX.json)"
+REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format="value(projectNumber)")
+WIF_POOL="github-pool"
+WIF_PROVIDER="github-provider"
+WIF_PROVIDER_FULL="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL}/providers/${WIF_PROVIDER}"
 
-echo "Project  : $GCP_PROJECT"
-echo "Signer   : $GCP_SIGNING_MEMBER"
-echo "State    : gs://$STATE_BUCKET"
+echo "Project    : $GCP_PROJECT"
+echo "Signer     : $GCP_SIGNING_MEMBER"
+echo "State      : gs://$STATE_BUCKET"
+echo "Repository : $REPO"
 echo ""
 read -r -p "Proceed? [y/N] " confirm
 [[ "$confirm" =~ ^[Yy]$ ]] || exit 0
@@ -54,6 +62,7 @@ gcloud services enable \
   iam.googleapis.com \
   iamcredentials.googleapis.com \
   cloudresourcemanager.googleapis.com \
+  sts.googleapis.com \
   --project="$GCP_PROJECT"
 
 echo "    Waiting 30s for API enablement to propagate..."
@@ -72,7 +81,37 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. GitHub Actions service account
+# 3. Least-privilege custom IAM role
+#    Scoped to exactly what Terraform needs — no storage.admin or iam.admin.
+# ---------------------------------------------------------------------------
+echo ""
+echo "==> Creating least-privilege deployer role..."
+PERMISSIONS="storage.buckets.create,storage.buckets.delete,\
+storage.buckets.get,storage.buckets.getIamPolicy,storage.buckets.list,\
+storage.buckets.setIamPolicy,storage.buckets.update,\
+storage.objects.create,storage.objects.delete,\
+storage.objects.get,storage.objects.list,\
+iam.serviceAccounts.create,iam.serviceAccounts.delete,\
+iam.serviceAccounts.get,iam.serviceAccounts.getIamPolicy,\
+iam.serviceAccounts.list,iam.serviceAccounts.setIamPolicy,\
+resourcemanager.projects.get"
+
+if gcloud iam roles describe SecureTransferDeployer --project="$GCP_PROJECT" &>/dev/null; then
+  echo "    Role already exists — updating permissions..."
+  gcloud iam roles update SecureTransferDeployer \
+    --project="$GCP_PROJECT" \
+    --permissions="$PERMISSIONS" \
+    --quiet
+else
+  gcloud iam roles create SecureTransferDeployer \
+    --project="$GCP_PROJECT" \
+    --title="Secure Transfer Deployer" \
+    --description="Least-privilege role for secure-file-transfer GitHub Actions" \
+    --permissions="$PERMISSIONS"
+fi
+
+# ---------------------------------------------------------------------------
+# 4. GitHub Actions service account
 # ---------------------------------------------------------------------------
 echo ""
 echo "==> Creating GitHub Actions service account..."
@@ -84,36 +123,115 @@ else
     --display-name="GitHub Actions Deployer"
 fi
 
-echo "==> Granting IAM roles..."
-for role in roles/storage.admin roles/iam.serviceAccountAdmin roles/iam.serviceAccountTokenCreator; do
-  gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+echo "==> Granting custom deployer role..."
+gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="projects/$GCP_PROJECT/roles/SecureTransferDeployer" \
+  --quiet
+
+# Remove broad legacy roles if they were previously granted
+for legacy in roles/storage.admin roles/iam.serviceAccountAdmin roles/iam.serviceAccountTokenCreator; do
+  gcloud projects remove-iam-policy-binding "$GCP_PROJECT" \
     --member="serviceAccount:$SA_EMAIL" \
-    --role="$role" \
-    --quiet
+    --role="$legacy" \
+    --quiet 2>/dev/null || true
 done
 
-echo "==> Creating service account key..."
-gcloud iam service-accounts keys create "$KEY_FILE" \
-  --iam-account="$SA_EMAIL" \
-  --project="$GCP_PROJECT"
+# ---------------------------------------------------------------------------
+# 5. Workload Identity Federation — no SA key is ever created or stored
+# ---------------------------------------------------------------------------
+echo ""
+echo "==> Configuring Workload Identity Federation..."
+
+if gcloud iam workload-identity-pools describe "$WIF_POOL" \
+    --project="$GCP_PROJECT" --location=global &>/dev/null; then
+  echo "    WIF pool already exists — skipping."
+else
+  gcloud iam workload-identity-pools create "$WIF_POOL" \
+    --project="$GCP_PROJECT" \
+    --location=global \
+    --display-name="GitHub Actions Pool"
+fi
+
+if gcloud iam workload-identity-pools providers describe "$WIF_PROVIDER" \
+    --project="$GCP_PROJECT" --location=global \
+    --workload-identity-pool="$WIF_POOL" &>/dev/null; then
+  echo "    WIF provider already exists — skipping."
+else
+  gcloud iam workload-identity-pools providers create-oidc "$WIF_PROVIDER" \
+    --project="$GCP_PROJECT" \
+    --location=global \
+    --workload-identity-pool="$WIF_POOL" \
+    --display-name="GitHub Actions OIDC Provider" \
+    --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+    --issuer-uri="https://token.actions.githubusercontent.com" \
+    --attribute-condition="attribute.repository=='${REPO}'"
+fi
+
+echo "==> Binding repository to service account..."
+gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+  --project="$GCP_PROJECT" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL}/attribute.repository/${REPO}" \
+  --quiet
 
 # ---------------------------------------------------------------------------
-# 4. GitHub Actions secrets
+# 6. GCS Data Access Audit Logs
+#    Adds READ + WRITE audit log config to the project IAM policy.
+# ---------------------------------------------------------------------------
+echo ""
+echo "==> Enabling GCS Data Access Audit Logs..."
+gcloud projects get-iam-policy "$GCP_PROJECT" --format=json | python3 - "$GCP_PROJECT" << 'PYEOF'
+import sys, json, subprocess, tempfile, os
+
+project = sys.argv[1]
+policy  = json.load(sys.stdin)
+
+svc = "storage.googleapis.com"
+existing = policy.setdefault("auditConfigs", [])
+
+if any(c.get("service") == svc for c in existing):
+    print("    Audit logs already configured — skipping.")
+    sys.exit(0)
+
+existing.append({
+    "service": svc,
+    "auditLogConfigs": [
+        {"logType": "DATA_READ"},
+        {"logType": "DATA_WRITE"},
+    ],
+})
+
+with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+    json.dump(policy, f)
+    tmp = f.name
+
+subprocess.run(
+    ["gcloud", "projects", "set-iam-policy", project, tmp, "--quiet"],
+    check=True,
+)
+os.unlink(tmp)
+print("    Audit logs enabled.")
+PYEOF
+
+# ---------------------------------------------------------------------------
+# 7. GitHub Actions secrets
+#    No GCP_CREDENTIALS — WIF handles authentication keylessly.
 # ---------------------------------------------------------------------------
 echo ""
 echo "==> Setting GitHub Actions secrets..."
-gh secret set GCP_PROJECT_ID      --body "$GCP_PROJECT"
-gh secret set TF_STATE_BUCKET     --body "$STATE_BUCKET"
-gh secret set GCP_SIGNING_MEMBERS --body "[\"$GCP_SIGNING_MEMBER\"]"
-gh secret set GCP_CREDENTIALS     < "$KEY_FILE"
+gh secret set GCP_PROJECT_ID             --body "$GCP_PROJECT"
+gh secret set TF_STATE_BUCKET            --body "$STATE_BUCKET"
+gh secret set GCP_SIGNING_MEMBERS        --body "[\"$GCP_SIGNING_MEMBER\"]"
+gh secret set WORKLOAD_IDENTITY_PROVIDER --body "$WIF_PROVIDER_FULL"
+gh secret set GCP_SERVICE_ACCOUNT        --body "$SA_EMAIL"
 
-# Key file is only needed for the secret — remove it immediately
-rm -f "$KEY_FILE"
-echo "    Key file deleted."
+# Remove legacy key secret if it exists
+gh secret delete GCP_CREDENTIALS 2>/dev/null && echo "    Removed legacy GCP_CREDENTIALS secret." || true
 
 # ---------------------------------------------------------------------------
 echo ""
-echo "Done. All secrets are set:"
+echo "Done. Secrets set:"
 gh secret list
 echo ""
 echo "Next steps:"

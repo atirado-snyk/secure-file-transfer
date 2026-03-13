@@ -150,7 +150,17 @@ Xk9mP2rL...
 ────────────────────────────────────────────────────────────────────────
 ```
 
-The recipient unzips with any AES-256 compatible tool (7-Zip, macOS Archive Utility, `unzip`).
+The recipient unzips with any AES-256 compatible tool. macOS's built-in `unzip` does **not** support AES-256 — use 7-Zip:
+
+```bash
+# macOS (install once)
+brew install p7zip
+
+# Extract
+7z x -p<password> <file>.zip
+```
+
+On Windows, 7-Zip or WinZip work. On Linux, `7z` (from `p7zip-full`) or `unzip` from InfoZIP 6.1+.
 
 ---
 

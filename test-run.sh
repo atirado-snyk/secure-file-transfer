@@ -75,21 +75,15 @@ info "Bucket: secure-transfer-${WORKSPACE}"
 step "3 / 4  Upload file and get signed URL"
 source "$VENV_DIR/bin/activate"
 
-URL=$(python "$(dirname "$0")/scripts/transfer.py" upload \
+python "$(dirname "$0")/scripts/transfer.py" upload \
   --workspace "$WORKSPACE" \
   --file "$TEST_FILE" \
-  --expiry 30m 2>&1 | grep "https://storage.googleapis.com")
+  --expiry 30m
 
 deactivate
 
 echo ""
-echo "  ┌──────────────────────────────────────────────────────────────────┐"
-echo "  │  Shareable URL (expires in 30 minutes):                          │"
-echo "  │                                                                   │"
-echo "  │  $URL"
-echo "  └──────────────────────────────────────────────────────────────────┘"
-echo ""
-ask "Open the URL in a browser, confirm the file downloads, then press Enter"
+ask "Copy the URL above, open it in a browser, confirm the file downloads, then press Enter"
 
 # ---------------------------------------------------------------------------
 # Step 4 — Tear down

@@ -10,6 +10,10 @@ on:
         options:
           - apply
           - destroy
+      confirm_destroy:
+        description: "Type 'destroy' to confirm teardown (required when action = destroy)"
+        required: false
+        type: string
 
 jobs:
   terraform:
@@ -20,6 +24,12 @@ jobs:
         working-directory: terraform
 
     steps:
+      - name: Guard — require confirmation for destroy
+        if: github.event.inputs.action == 'destroy' && github.event.inputs.confirm_destroy != 'destroy'
+        run: |
+          echo "::error::Destroy requires typing 'destroy' in the confirm_destroy input."
+          exit 1
+
       - uses: actions/checkout@v4
 
       - name: Authenticate to GCP
@@ -33,9 +43,7 @@ jobs:
           terraform_version: "~1.5"
 
       - name: Terraform Init
-        run: |
-          # Inject the state bucket name into the backend config at init time
-          terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
 
       - name: Terraform Apply
         if: github.event.inputs.action == 'apply'
@@ -44,16 +52,16 @@ jobs:
           TF_VAR_project_id:         ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_signing_sa_members: ${{ secrets.GCP_SIGNING_MEMBERS }}
 
-      - name: Terraform Destroy
-        if: github.event.inputs.action == 'destroy'
-        run: terraform destroy -auto-approve
+      - name: Show outputs
+        if: github.event.inputs.action == 'apply'
+        run: terraform output
         env:
           TF_VAR_project_id:         ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_signing_sa_members: ${{ secrets.GCP_SIGNING_MEMBERS }}
 
-      - name: Show outputs
-        if: github.event.inputs.action == 'apply'
-        run: terraform output
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        run: terraform destroy -auto-approve
         env:
           TF_VAR_project_id:         ${{ secrets.GCP_PROJECT_ID }}
           TF_VAR_signing_sa_members: ${{ secrets.GCP_SIGNING_MEMBERS }}

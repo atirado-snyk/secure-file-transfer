@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # test-run.sh — end-to-end walkthrough of the secure-file-transfer workflow.
 #
-# Runs through: provision → upload → verify URL → tear down
-# Takes about 2 minutes.
+# Runs through: provision → pack (encrypted zip) → verify URL → tear down
+# Takes about 3 minutes.
 
 set -euo pipefail
 
 WORKSPACE="test-run-$(date +%s)"
-TEST_FILE="/tmp/${WORKSPACE}.txt"
+TEST_DIR="/tmp/${WORKSPACE}"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,11 +81,14 @@ fi
 ok "Python venv found"
 
 # ---------------------------------------------------------------------------
-# Step 1 — Create a test file
+# Step 1 — Create a test folder with a few files
 # ---------------------------------------------------------------------------
-step "1 / 4  Create test file"
-echo "secure-file-transfer test run — workspace: $WORKSPACE — $(date -u)" > "$TEST_FILE"
-ok "Created $TEST_FILE"
+step "1 / 4  Create test folder"
+mkdir -p "$TEST_DIR/subfolder"
+echo "secure-file-transfer test run — workspace: $WORKSPACE — $(date -u)" > "$TEST_DIR/readme.txt"
+echo "top-level file" > "$TEST_DIR/document.txt"
+echo "nested file"   > "$TEST_DIR/subfolder/nested.txt"
+ok "Created $TEST_DIR with 3 files (including subfolder)"
 
 # ---------------------------------------------------------------------------
 # Step 2 — Provision workspace
@@ -109,21 +112,21 @@ info "Waiting 90 s for IAM propagation..."
 sleep 90
 
 # ---------------------------------------------------------------------------
-# Step 3 — Upload and get signed URL
+# Step 3 — Pack folder and get signed URL
 # ---------------------------------------------------------------------------
-step "3 / 4  Upload file and get signed URL"
+step "3 / 4  Pack folder and get signed URL"
 source "$VENV_DIR/bin/activate"
 
 UPLOAD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-python "$(dirname "$0")/scripts/transfer.py" upload \
+python "$(dirname "$0")/scripts/transfer.py" pack \
   --workspace "$WORKSPACE" \
-  --file "$TEST_FILE" \
+  --folder "$TEST_DIR" \
   --expiry 30m
 
 deactivate
 
 echo ""
-ask "Copy the URL above, open it in a browser, confirm the file downloads, then press Enter"
+ask "Copy the URL above, download the zip, enter the password, verify the files — then press Enter"
 
 # ---------------------------------------------------------------------------
 # Step 4 — Tear down
@@ -144,7 +147,7 @@ wait_for_run "$RUN_ID"
 ok "Workspace destroyed"
 
 # ---------------------------------------------------------------------------
-rm -f "$TEST_FILE"
+rm -rf "$TEST_DIR"
 echo ""
 echo "══════════════════════════════════════════════════════════════════════"
 echo "  Test run complete. All steps passed."

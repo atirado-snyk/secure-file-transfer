@@ -123,6 +123,17 @@ python scripts/transfer.py upload --workspace acme-q1-report --file report.pdf -
 
 ---
 
+## Known limitations
+
+Several security findings from code reviews were deliberately not addressed. Each is documented as a GitHub issue with the rationale:
+
+- [#4 — Retention policy on transfer bucket](../../issues/4)
+- [#5 — Plan-time validation of bootstrap custom role](../../issues/5)
+- [#6 — Soft-deleted custom role detection in setup.sh](../../issues/6)
+- [#7 — Separate upload and signing IAM permissions](../../issues/7)
+
+---
+
 ## Security notes
 
 - **No credentials at rest** — GitHub Actions authenticates via Workload Identity Federation. No service account key is ever created or stored.

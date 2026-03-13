@@ -1,0 +1,74 @@
+name: Secure File Transfer — Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action to run"
+        required: true
+        type: choice
+        options:
+          - apply
+          - destroy
+      workspace:
+        description: "Workspace name — identifies this transfer (e.g. acme-q1-report). Each workspace gets its own isolated bucket."
+        required: true
+        type: string
+      confirm_destroy:
+        description: "Type 'destroy' to confirm teardown (required when action = destroy)"
+        required: false
+        type: string
+
+jobs:
+  terraform:
+    name: terraform ${{ github.event.inputs.action }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Guard — require confirmation for destroy
+        if: github.event.inputs.action == 'destroy' && github.event.inputs.confirm_destroy != 'destroy'
+        run: |
+          echo "::error::Destroy requires typing 'destroy' in the confirm_destroy input."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.5"
+
+      - name: Terraform Init
+        run: terraform init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: Select or create workspace
+        run: terraform workspace select -or-create ${{ github.event.inputs.workspace }}
+
+      - name: Terraform Apply
+        if: github.event.inputs.action == 'apply'
+        run: terraform apply -auto-approve
+        env:
+          TF_VAR_project_id:         ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_signing_sa_members: ${{ secrets.GCP_SIGNING_MEMBERS }}
+
+      - name: Show outputs
+        if: github.event.inputs.action == 'apply'
+        run: terraform output
+        env:
+          TF_VAR_project_id:         ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_signing_sa_members: ${{ secrets.GCP_SIGNING_MEMBERS }}
+
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        run: terraform destroy -auto-approve
+        env:
+          TF_VAR_project_id:         ${{ secrets.GCP_PROJECT_ID }}
+          TF_VAR_signing_sa_members: ${{ secrets.GCP_SIGNING_MEMBERS }}

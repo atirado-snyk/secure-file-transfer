@@ -1,5 +1,15 @@
 terraform {
   required_version = ">= 1.5"
+
+  # Remote state stored in GCS so it persists across GitHub Actions runs.
+  # The bucket must exist before the first terraform init — create it once manually:
+  #   gsutil mb -p <project_id> gs://<project_id>-tf-state
+  #   gsutil versioning set on gs://<project_id>-tf-state
+  backend "gcs" {
+    bucket = "__TF_STATE_BUCKET__"   # replace with <project_id>-tf-state
+    prefix = "secure-file-transfer"
+  }
+
   required_providers {
     google = {
       source  = "hashicorp/google"
@@ -16,15 +26,13 @@ provider "google" {
   project = var.project_id
 }
 
-resource "random_id" "suffix" {
-  byte_length = 4
-}
-
 # ---------------------------------------------------------------------------
 # Private GCS bucket
+# The bucket name matches the Terraform workspace name so --bucket in the
+# Python script is always predictable: secure-transfer-<workspace>
 # ---------------------------------------------------------------------------
 resource "google_storage_bucket" "transfer" {
-  name                        = "secure-transfer-${random_id.suffix.hex}"
+  name                        = "secure-transfer-${terraform.workspace}"
   location                    = var.region
   force_destroy               = true          # allows terraform destroy to remove objects
   uniform_bucket_level_access = true
@@ -45,8 +53,8 @@ resource "google_storage_bucket" "transfer" {
 # No long-lived key is created; callers impersonate it via the IAM API.
 # ---------------------------------------------------------------------------
 resource "google_service_account" "signer" {
-  account_id   = "secure-transfer-signer"
-  display_name = "Secure Transfer — URL Signer"
+  account_id   = "st-signer-${terraform.workspace}"
+  display_name = "Secure Transfer — URL Signer (${terraform.workspace})"
 }
 
 # The signing SA needs to read objects in order for a signed URL to be valid

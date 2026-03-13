@@ -24,9 +24,10 @@ wait_for_run() {
 }
 
 # Verify the signed URL was used by checking GCS Data Access Audit Logs.
-# No time filter — any DATA_READ by the signing SA is sufficient confirmation.
+# since: ISO timestamp — only accept downloads after the upload completed.
 check_download_occurred() {
   local workspace=$1
+  local since=$2
   local project
   project=$(gcloud config get-value project 2>/dev/null)
   local bucket="secure-transfer-${workspace}"
@@ -38,7 +39,8 @@ check_download_occurred() {
     "logName=\"projects/${project}/logs/cloudaudit.googleapis.com%2Fdata_access\" \
      AND resource.type=\"gcs_bucket\" \
      AND resource.labels.bucket_name=\"${bucket}\" \
-     AND protoPayload.authenticationInfo.principalEmail=\"${signing_sa}\"" \
+     AND protoPayload.authenticationInfo.principalEmail=\"${signing_sa}\" \
+     AND timestamp>=\"${since}\"" \
     --limit=1 \
     --format="value(timestamp)" \
     2>/dev/null)
@@ -112,6 +114,7 @@ sleep 90
 step "3 / 4  Upload file and get signed URL"
 source "$VENV_DIR/bin/activate"
 
+UPLOAD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 python "$(dirname "$0")/scripts/transfer.py" upload \
   --workspace "$WORKSPACE" \
   --file "$TEST_FILE" \
@@ -126,7 +129,7 @@ ask "Copy the URL above, open it in a browser, confirm the file downloads, then 
 # Step 4 — Tear down
 # ---------------------------------------------------------------------------
 step "4 / 4  Tear down workspace: $WORKSPACE"
-check_download_occurred "$WORKSPACE"
+check_download_occurred "$WORKSPACE" "$UPLOAD_TIME"
 info "Triggering terraform destroy..."
 BEFORE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 gh workflow run terraform.yml \

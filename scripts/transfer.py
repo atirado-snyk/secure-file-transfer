@@ -102,7 +102,8 @@ def cmd_upload(args):
 
     print(f"Uploading  {filepath}  →  gs://{bucket_name}/{object_name}")
     blob.upload_from_filename(str(filepath), content_type=content_type)
-    print("Upload complete.")
+    blob.reload()
+    print(f"Upload complete.  CRC32c: {blob.crc32c}  |  MD5: {blob.md5_hash}")
 
     # Sign the URL via the IAM API using the operator's access token.
     # The signing SA email appears in the URL credential; GCS validates access
@@ -124,6 +125,8 @@ def cmd_upload(args):
     print(f"Shareable URL (expires {expires_at.strftime('%Y-%m-%d %H:%M UTC')}):")
     print()
     print(url)
+    print()
+    print(f"Integrity:  CRC32c = {blob.crc32c}  |  MD5 = {blob.md5_hash}")
     print("=" * 72)
 
 

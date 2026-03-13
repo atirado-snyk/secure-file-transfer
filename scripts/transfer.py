@@ -19,16 +19,33 @@ import argparse
 import datetime
 import mimetypes
 import pathlib
+import re
 import sys
 
 import google.auth
+import google.auth.exceptions
 import google.auth.transport.requests
+import google.api_core.exceptions
 from google.cloud import storage
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_WORKSPACE_RE = re.compile(r'^[a-z0-9][a-z0-9-]{1,47}[a-z0-9]$')
+
+def validate_workspace(name: str) -> None:
+    """Exit with a clear message if the workspace name is not GCS-safe."""
+    if not _WORKSPACE_RE.match(name):
+        sys.exit(
+            f"Error: invalid workspace name '{name}'.\n"
+            "Workspace names must be 3–49 characters, lowercase letters, "
+            "numbers, and hyphens only. Cannot start or end with a hyphen."
+        )
+    if '--' in name:
+        sys.exit(f"Error: workspace name '{name}' cannot contain consecutive hyphens.")
+
 
 def resolve(workspace: str, project: str) -> tuple[str, str]:
     """Return (bucket_name, signing_sa_email) for a given workspace."""
@@ -62,6 +79,7 @@ def parse_expiry(value: str) -> datetime.timedelta:
 # ---------------------------------------------------------------------------
 
 def cmd_upload(args):
+    validate_workspace(args.workspace)
     filepath = pathlib.Path(args.file)
     if not filepath.exists():
         sys.exit(f"Error: file not found: {filepath}")
@@ -110,6 +128,7 @@ def cmd_upload(args):
 
 
 def cmd_list(args):
+    validate_workspace(args.workspace)
     source_credentials, project = google.auth.default(
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
@@ -128,6 +147,12 @@ def cmd_list(args):
 
 
 def cmd_delete(args):
+    validate_workspace(args.workspace)
+    if args.confirm != args.object:
+        sys.exit(
+            f"Error: confirmation does not match object name.\n"
+            f"To delete '{args.object}', pass --confirm '{args.object}'"
+        )
     source_credentials, project = google.auth.default(
         scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
@@ -155,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_upload = sub.add_parser("upload", parents=[common], help="Upload a file and print a signed URL")
     p_upload.add_argument("--file", required=True, help="Local file path to upload")
-    p_upload.add_argument("--expiry", default="1h", help="URL lifetime: m/h/d (max 7d). Default: 1h")
+    p_upload.add_argument("--expiry", default="1h", help="URL lifetime: m/h/d (max 24h). Default: 1h")
     p_upload.add_argument("--prefix", default="", help="Optional folder prefix inside the bucket")
 
     p_list = sub.add_parser("list", parents=[common], help="List objects in the bucket")
@@ -163,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_del = sub.add_parser("delete", parents=[common], help="Delete an object from the bucket")
     p_del.add_argument("--object", required=True, help="Object name to delete")
+    p_del.add_argument("--confirm", required=True, help="Repeat the object name to confirm deletion")
 
     return parser
 
@@ -178,8 +204,14 @@ def main():
             "Error: no Application Default Credentials found.\n"
             "Run:  gcloud auth application-default login"
         )
+    except google.api_core.exceptions.NotFound:
+        sys.exit("Error: resource not found. Check workspace name and that infrastructure has been provisioned.")
+    except google.api_core.exceptions.PermissionDenied:
+        sys.exit("Error: permission denied. Verify your account is listed in GCP_SIGNING_MEMBERS.")
+    except google.api_core.exceptions.GoogleAPICallError as exc:
+        sys.exit(f"Error: GCP API call failed ({type(exc).__name__}). Check GCP project and credentials.")
     except Exception as exc:  # noqa: BLE001
-        sys.exit(f"Error: {exc}")
+        sys.exit(f"Error: unexpected failure ({type(exc).__name__}).")
 
 
 if __name__ == "__main__":

@@ -90,12 +90,14 @@ ok "Created $TEST_FILE"
 # ---------------------------------------------------------------------------
 step "2 / 4  Provision workspace: $WORKSPACE"
 info "Triggering terraform apply..."
-RUN_URL=$(gh workflow run terraform.yml \
+BEFORE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+gh workflow run terraform.yml \
   -f action=apply \
-  -f workspace="$WORKSPACE" 2>&1 | grep "https://" || true)
+  -f workspace="$WORKSPACE"
 
 sleep 3
-RUN_ID=$(gh run list --workflow=terraform.yml --limit=1 --json databaseId --jq '.[0].databaseId')
+RUN_ID=$(gh run list --workflow=terraform.yml --limit=10 --json databaseId,createdAt \
+  --jq "[.[] | select(.createdAt >= \"$BEFORE\")] | .[0].databaseId")
 wait_for_run "$RUN_ID"
 ok "Infrastructure provisioned"
 info "Bucket: secure-transfer-${WORKSPACE}"
@@ -126,13 +128,15 @@ ask "Copy the URL above, open it in a browser, confirm the file downloads, then 
 step "4 / 4  Tear down workspace: $WORKSPACE"
 check_download_occurred "$WORKSPACE"
 info "Triggering terraform destroy..."
+BEFORE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 gh workflow run terraform.yml \
   -f action=destroy \
   -f workspace="$WORKSPACE" \
   -f confirm_destroy=destroy
 
 sleep 3
-RUN_ID=$(gh run list --workflow=terraform.yml --limit=1 --json databaseId --jq '.[0].databaseId')
+RUN_ID=$(gh run list --workflow=terraform.yml --limit=10 --json databaseId,createdAt \
+  --jq "[.[] | select(.createdAt >= \"$BEFORE\")] | .[0].databaseId")
 wait_for_run "$RUN_ID"
 ok "Workspace destroyed"
 

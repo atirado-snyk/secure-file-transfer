@@ -27,7 +27,7 @@ class TestParseExpiry:
 
     def test_default_is_one_hour(self):
         parser = transfer.build_parser()
-        args = parser.parse_args(["upload", "--workspace", "test", "--file", "x.pdf"])
+        args = parser.parse_args(["upload", "--workspace", "test-ws", "--file", "x.pdf"])
         assert args.expiry == "1h"
 
     def test_exceeds_max_raises(self):
@@ -53,6 +53,42 @@ class TestParseExpiry:
     def test_non_numeric_raises(self):
         with pytest.raises(argparse.ArgumentTypeError):
             transfer.parse_expiry("abch")
+
+
+# ---------------------------------------------------------------------------
+# validate_workspace
+# ---------------------------------------------------------------------------
+
+class TestValidateWorkspace:
+    def test_valid_name(self):
+        transfer.validate_workspace("acme-q1-report")  # no exception
+
+    def test_valid_alphanumeric(self):
+        transfer.validate_workspace("abc123")  # no exception
+
+    def test_too_short_raises(self):
+        with pytest.raises(SystemExit):
+            transfer.validate_workspace("ab")
+
+    def test_leading_hyphen_raises(self):
+        with pytest.raises(SystemExit):
+            transfer.validate_workspace("-invalid")
+
+    def test_trailing_hyphen_raises(self):
+        with pytest.raises(SystemExit):
+            transfer.validate_workspace("invalid-")
+
+    def test_uppercase_raises(self):
+        with pytest.raises(SystemExit):
+            transfer.validate_workspace("Invalid-Name")
+
+    def test_consecutive_hyphens_raises(self):
+        with pytest.raises(SystemExit):
+            transfer.validate_workspace("double--hyphen")
+
+    def test_underscore_raises(self):
+        with pytest.raises(SystemExit):
+            transfer.validate_workspace("invalid_name")
 
 
 # ---------------------------------------------------------------------------
@@ -93,20 +129,24 @@ class TestParser:
 
     def test_upload_requires_file(self):
         with pytest.raises(SystemExit):
-            self.parser.parse_args(["upload", "--workspace", "test"])
+            self.parser.parse_args(["upload", "--workspace", "test-ws"])
 
     def test_upload_defaults(self):
-        args = self.parser.parse_args(["upload", "--workspace", "ws", "--file", "f.pdf"])
+        args = self.parser.parse_args(["upload", "--workspace", "my-ws", "--file", "f.pdf"])
         assert args.expiry == "1h"
         assert args.prefix == ""
 
     def test_delete_requires_object(self):
         with pytest.raises(SystemExit):
-            self.parser.parse_args(["delete", "--workspace", "ws"])
+            self.parser.parse_args(["delete", "--workspace", "my-ws"])
+
+    def test_delete_requires_confirm(self):
+        with pytest.raises(SystemExit):
+            self.parser.parse_args(["delete", "--workspace", "my-ws", "--object", "report.pdf"])
 
     def test_list_parses(self):
-        args = self.parser.parse_args(["list", "--workspace", "ws"])
-        assert args.workspace == "ws"
+        args = self.parser.parse_args(["list", "--workspace", "my-ws"])
+        assert args.workspace == "my-ws"
         assert args.prefix == ""
 
 
@@ -193,3 +233,33 @@ class TestCmdUpload:
         transfer.cmd_upload(self._make_args(test_file, prefix="folder"))
 
         mock_bucket.blob.assert_called_with("folder/file.txt")
+
+
+# ---------------------------------------------------------------------------
+# cmd_delete (mocked GCP)
+# ---------------------------------------------------------------------------
+
+class TestCmdDelete:
+    def _make_args(self, obj, confirm=None):
+        args = MagicMock()
+        args.workspace = "test-ws"
+        args.object = obj
+        args.confirm = confirm if confirm is not None else obj
+        return args
+
+    def test_mismatched_confirm_exits(self):
+        args = self._make_args("report.pdf", confirm="wrong.pdf")
+        with pytest.raises(SystemExit):
+            transfer.cmd_delete(args)
+
+    @patch("transfer.google.auth.default")
+    @patch("transfer.storage.Client")
+    def test_delete_confirmed(self, mock_client_cls, mock_default, capsys):
+        mock_default.return_value = (MagicMock(), "proj")
+        mock_blob = MagicMock()
+        mock_client_cls.return_value.bucket.return_value.blob.return_value = mock_blob
+
+        transfer.cmd_delete(self._make_args("report.pdf"))
+
+        mock_blob.delete.assert_called_once()
+        assert "report.pdf" in capsys.readouterr().out

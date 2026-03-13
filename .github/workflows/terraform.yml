@@ -37,6 +37,17 @@ jobs:
           echo "::error::Destroy requires typing 'destroy' in the confirm_destroy input."
           exit 1
 
+      - name: Validate workspace name
+        run: |
+          if ! echo "${{ github.event.inputs.workspace }}" | grep -qE '^[a-z0-9][a-z0-9-]{1,47}[a-z0-9]$'; then
+            echo "::error::Invalid workspace name. Use lowercase letters, numbers, and hyphens only (3–49 chars)."
+            exit 1
+          fi
+          if echo "${{ github.event.inputs.workspace }}" | grep -q '\-\-'; then
+            echo "::error::Workspace name cannot contain consecutive hyphens."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Authenticate to GCP

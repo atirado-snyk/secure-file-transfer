@@ -31,39 +31,33 @@ strong ECDHE cipher suites. No service-account key file is ever created or store
 
 ## Prerequisites
 
-- GCP project with the following APIs enabled:
-  ```bash
-  gcloud services enable storage.googleapis.com iam.googleapis.com iamcredentials.googleapis.com
-  ```
-- A GCS bucket for Terraform state — create it once:
-  ```bash
-  gsutil mb -p <project_id> gs://<project_id>-tf-state
-  gsutil versioning set on gs://<project_id>-tf-state
-  ```
-- A GCP service account with Storage Admin + IAM Admin permissions, and a JSON key for GitHub Actions.
-- Python 3.9+ with `gcloud` CLI authenticated locally (`gcloud auth application-default login`).
+- A GCP project
+- `gcloud` CLI authenticated: `gcloud auth login && gcloud config set project <project_id>`
+- `gh` CLI authenticated: `gh auth login`
+- Python 3.9+
 
 ---
 
 ## One-time setup
 
-### 1. GitHub Actions secrets
-
-Set these in **Settings → Secrets and variables → Actions**:
-
-| Secret | Value |
-|---|---|
-| `GCP_PROJECT_ID` | your GCP project ID |
-| `GCP_CREDENTIALS` | contents of the service account JSON key |
-| `GCP_SIGNING_MEMBERS` | IAM members allowed to upload and sign, e.g. `["user:you@gmail.com"]` |
-| `TF_STATE_BUCKET` | name of the GCS state bucket created above |
-
-### 2. Python dependencies
+Run the bootstrap script — it handles everything automatically:
 
 ```bash
-cd scripts
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+bash setup.sh
+```
+
+It will:
+1. Enable the required GCP APIs
+2. Create a GCS bucket for Terraform state
+3. Create a GitHub Actions service account with the necessary roles
+4. Set all four repository secrets (`GCP_PROJECT_ID`, `GCP_CREDENTIALS`, `GCP_SIGNING_MEMBERS`, `TF_STATE_BUCKET`)
+
+The service account key is written directly to the secret and deleted from disk immediately.
+
+Then install the Python dependencies:
+
+```bash
+cd scripts && python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 ```
 
 ---

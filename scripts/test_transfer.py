@@ -23,7 +23,7 @@ class TestParseExpiry:
         assert transfer.parse_expiry("30m") == datetime.timedelta(minutes=30)
 
     def test_days(self):
-        assert transfer.parse_expiry("7d") == datetime.timedelta(days=7)
+        assert transfer.parse_expiry("1d") == datetime.timedelta(days=1)
 
     def test_default_is_one_hour(self):
         parser = transfer.build_parser()
@@ -31,8 +31,8 @@ class TestParseExpiry:
         assert args.expiry == "1h"
 
     def test_exceeds_max_raises(self):
-        with pytest.raises(argparse.ArgumentTypeError, match="7 days"):
-            transfer.parse_expiry("8d")
+        with pytest.raises(argparse.ArgumentTypeError, match="24 hours"):
+            transfer.parse_expiry("2d")
 
     def test_zero_raises(self):
         with pytest.raises(argparse.ArgumentTypeError, match="positive"):

@@ -50,9 +50,9 @@ def parse_expiry(value: str) -> datetime.timedelta:
     if amount <= 0:
         raise argparse.ArgumentTypeError("Expiry must be a positive number.")
     td = datetime.timedelta(**{units[value[-1]]: amount})
-    if td > datetime.timedelta(days=7):
+    if td > datetime.timedelta(days=1):
         raise argparse.ArgumentTypeError(
-            "GCS V4 signed URLs cannot exceed 7 days. Use a shorter expiry."
+            "Expiry cannot exceed 24 hours — files are auto-deleted after 1 day. Use a shorter expiry."
         )
     return td
 

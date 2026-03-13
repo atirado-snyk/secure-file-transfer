@@ -12,7 +12,7 @@ variable "region" {
 variable "file_retention_days" {
   description = "Days after which uploaded files are automatically deleted"
   type        = number
-  default     = 7
+  default     = 1
 }
 
 variable "signing_sa_members" {
